@@ -56,7 +56,7 @@ func (s *Plasma) NewIterator() ItemIterator {
 
 func (itr *Iterator) initPgIterator(pid PageId, seekItm unsafe.Pointer) {
 	itr.currPid = pid
-	if pgPtr, err := itr.store.ReadPage(pid, itr.wCtx.pgRdrFn, true); err == nil {
+	if pgPtr, err := itr.store.ReadPage(pid, itr.wCtx.pgRdrFn, swapinMode); err == nil {
 		pg := pgPtr.(*page)
 		if !pg.IsEmpty() {
 			itr.nextPid = pg.Next()
@@ -269,6 +269,8 @@ func newPgOpIterator(pd *pageDelta, cmp skiplist.CompareFn,
 	startPd := pd
 	pdCount := 0
 
+	var swapOutPd *pageDelta
+
 	pdi := &pdIterator{}
 loop:
 	for pd != nil {
@@ -311,6 +313,12 @@ loop:
 			break loop
 		case opInsertDelta, opDeleteDelta:
 			pdCount++
+
+		case opPageSwapInDelta:
+			swapOutPd = (*swapInPageDelta)(unsafe.Pointer(pd)).pd
+		case opPageSwapOutDelta:
+			pd = swapOutPd
+			goto loop
 		}
 
 		pd = pd.next
@@ -318,13 +326,17 @@ loop:
 
 	if pdCount > 0 {
 		pdi.deltas = make([]PageItem, 0, pdCount)
-		for x := startPd; x != pd; x = x.next {
+		for x := startPd; x != pd; {
 			if x.op == opInsertDelta || x.op == opDeleteDelta {
 				rec := (*recordDelta)(unsafe.Pointer(x))
 				if cmp(rec.itm, high) < 0 && cmp(rec.itm, low) >= 0 {
 					pdi.deltas = append(pdi.deltas, x)
 				}
+			} else if x.op == opPageSwapOutDelta {
+				x = swapOutPd
+				continue
 			}
+			x = x.next
 		}
 
 		s := pageItemSorter{itms: pdi.deltas, cmp: cmp}

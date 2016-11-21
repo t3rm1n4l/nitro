@@ -9,13 +9,21 @@ import (
 
 const evictMask = uint64(0x8000000000000000)
 
+type pageFetchMode int
+
+const (
+	swapinMode pageFetchMode = iota
+	readinMode
+	inmemoryMode
+)
+
 type PageTable interface {
 	AllocPageId() PageId
 	FreePageId(PageId)
 
 	CreateMapping(PageId, Page)
 	UpdateMapping(PageId, Page) bool
-	ReadPage(PageId, PageReader, swapin bool) (Page, error)
+	ReadPage(PageId, PageReader, pageFetchMode) (Page, error)
 
 	EvictPage(PageId, Page, lssOffset) bool
 }
@@ -97,7 +105,7 @@ func (s *pageTable) UpdateMapping(pid PageId, pg Page) bool {
 	return false
 }
 
-func (s *pageTable) ReadPage(pid PageId, pgRdr PageReader, swapin bool) (Page, error) {
+func (s *pageTable) ReadPage(pid PageId, pgRdr PageReader, mode pageFetchMode) (Page, error) {
 	var pg Page
 	n := pid.(*skiplist.Node)
 
@@ -117,29 +125,36 @@ retry:
 		if err != nil {
 			return nil, err
 		}
-
-		if swapin {
-			if !s.UpdateMapping(pid, pg) {
-				atomic.AddInt64(&s.sts.SwapInConflicts, 1)
-				goto retry
-			}
-
-			atomic.AddInt64(&s.sts.NumPagesSwapIn, 1)
-		}
 	} else {
 		pg = newPage(s.storeCtx, n.Item(), ptr)
+		if pg.IsEvicted() && mode != inmemoryMode {
+			offset := pg.GetEvictOffset()
+			spg, err := pgRdr(offset)
+			if err != nil {
+				return nil, err
+			}
+
+			pg.SwapIn(spg)
+		} else {
+			mode = inmemoryMode
+		}
+	}
+
+	if mode == swapinMode {
+		if !s.UpdateMapping(pid, pg) {
+			atomic.AddInt64(&s.sts.SwapInConflicts, 1)
+			goto retry
+		}
+
+		atomic.AddInt64(&s.sts.NumPagesSwapIn, 1)
 	}
 
 	return pg, nil
 }
 
 func (s *pageTable) EvictPage(pid PageId, pg Page, offset lssOffset) bool {
-	n := pid.(*skiplist.Node)
-	pgi := pg.(*page)
-
-	newPtr := unsafe.Pointer(uintptr(uint64(offset) | evictMask))
-	if atomic.CompareAndSwapPointer(&n.DataPtr, pgi.prevHeadPtr, newPtr) {
-		pgi.prevHeadPtr = newPtr
+	pg.Evict(offset)
+	if s.UpdateMapping(pid, pg) {
 		atomic.AddInt64(&s.sts.NumPagesSwapOut, 1)
 		return true
 	}

@@ -251,7 +251,7 @@ func (s *Plasma) doRecovery() error {
 				s.CreateMapping(pid, pg)
 				s.indexPage(pid, w.wCtx)
 			} else {
-				currPg, err := s.ReadPage(pid, w.wCtx.pgRdrFn, true)
+				currPg, err := s.ReadPage(pid, w.wCtx.pgRdrFn, readinMode)
 				if err != nil {
 					return false, err
 				}
@@ -306,7 +306,7 @@ func (s *Plasma) doRecovery() error {
 	// some ranges became orphans. Hence we need to fix hiItms for the pages
 	itr := s.Skiplist.NewIterator(s.cmp, w.buf)
 	defer itr.Close()
-	p, _ := s.ReadPage(s.StartPageId(), w.wCtx.pgRdrFn, true)
+	p, _ := s.ReadPage(s.StartPageId(), w.wCtx.pgRdrFn, readinMode)
 	pg = p.(*page)
 	if pg != nil && pg.head != nil {
 		itms, _ := pg.collectItems(pg.head, nil, pg.head.hiItm)
@@ -318,7 +318,7 @@ func (s *Plasma) doRecovery() error {
 		pid := PageId(n)
 		pg.head.rightSibling = pid
 		pg.head.hiItm = n.Item()
-		p, _ := s.ReadPage(pid, w.wCtx.pgRdrFn, true)
+		p, _ := s.ReadPage(pid, w.wCtx.pgRdrFn, readinMode)
 		pg = p.(*page)
 
 		// TODO: Avoid need for full iteration for counting
@@ -446,7 +446,7 @@ func (s *Plasma) tryPageRemoval(pid PageId, pg Page, ctx *wCtx) {
 	shouldPersist := true
 
 	pPid := PageId(prev)
-	pPg, err := s.ReadPage(pPid, ctx.pgRdrFn, true)
+	pPg, err := s.ReadPage(pPid, ctx.pgRdrFn, readinMode)
 	if err != nil {
 		s.logError(fmt.Sprintf("tryPageRemove: err=%v", err))
 		return
@@ -514,8 +514,19 @@ func (s *Plasma) EndPageId() PageId {
 	return s.Skiplist.TailNode()
 }
 
-func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
+func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) (pageFetchMode, bool) {
 	var updated bool
+	mode := inmemoryMode
+
+	// Retry with full page read
+	if pg.NeedCompaction(s.Config.MaxDeltaChainLen) ||
+		pg.NeedSplit(s.Config.MaxPageItems) ||
+		pg.NeedMerge(s.Config.MinPageItems) {
+
+		if pg.IsEvicted() {
+			return readinMode, false
+		}
+	}
 
 	if pg.NeedCompaction(s.Config.MaxDeltaChainLen) {
 		staleFdSz := pg.Compact()
@@ -547,7 +558,7 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 			if updated = s.UpdateMapping(pid, pg); updated {
 				ctx.sts.FlushDataSz -= int64(staleFdSz)
 			}
-			return updated
+			return mode, updated
 		}
 
 		var offsets []lssOffset
@@ -600,10 +611,10 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 		updated = s.UpdateMapping(pid, pg)
 	}
 
-	return updated
+	return mode, updated
 }
 
-func (s *Plasma) fetchPage(itm unsafe.Pointer, ctx *wCtx) (pid PageId, pg Page, err error) {
+func (s *Plasma) fetchPage(itm unsafe.Pointer, ctx *wCtx, mode pageFetchMode) (pid PageId, pg Page, err error) {
 retry:
 	if prev, curr, found := s.Skiplist.Lookup(itm, s.cmp, ctx.buf, ctx.slSts); found {
 		pid = curr
@@ -612,7 +623,7 @@ retry:
 	}
 
 refresh:
-	if pg, err = s.ReadPage(pid, ctx.pgRdrFn, true); err != nil {
+	if pg, err = s.ReadPage(pid, ctx.pgRdrFn, mode); err != nil {
 		return nil, nil, err
 	}
 
@@ -630,15 +641,17 @@ refresh:
 }
 
 func (w *Writer) Insert(itm unsafe.Pointer) error {
+	var ok bool
+	mode := inmemoryMode
 retry:
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, w.wCtx, mode)
 	if err != nil {
 		return err
 	}
 
 	pg.Insert(itm)
 
-	if !w.trySMOs(pid, pg, w.wCtx, true) {
+	if mode, ok = w.trySMOs(pid, pg, w.wCtx, true); !ok {
 		w.sts.InsertConflicts++
 		goto retry
 	}
@@ -648,15 +661,18 @@ retry:
 }
 
 func (w *Writer) Delete(itm unsafe.Pointer) error {
+	var ok bool
+	mode := inmemoryMode
+
 retry:
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, w.wCtx, mode)
 	if err != nil {
 		return err
 	}
 
 	pg.Delete(itm)
 
-	if !w.trySMOs(pid, pg, w.wCtx, true) {
+	if mode, ok = w.trySMOs(pid, pg, w.wCtx, true); !ok {
 		w.sts.DeleteConflicts++
 		goto retry
 	}
@@ -666,7 +682,7 @@ retry:
 }
 
 func (w *Writer) Lookup(itm unsafe.Pointer) (unsafe.Pointer, error) {
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, w.wCtx, swapinMode)
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +773,7 @@ func (s *Plasma) logError(err string) {
 
 func (w *Writer) CompactAll() {
 	callb := func(pid PageId, partn RangePartition) error {
-		if pg, err := w.ReadPage(pid, nil, false); err == nil {
+		if pg, err := w.ReadPage(pid, nil, readinMode); err == nil {
 			staleFdSz := pg.Compact()
 			if updated := w.UpdateMapping(pid, pg); updated {
 				w.wCtx.sts.FlushDataSz -= int64(staleFdSz)

@@ -44,11 +44,18 @@ func (s *Plasma) CleanLSS(proceed func() bool) error {
 			_, node, found := s.Skiplist.Lookup(key, s.cmp, w.wCtx.buf, w.wCtx.slSts)
 			if found {
 				pid := PageId(node)
-				if pg, err = s.ReadPage(pid, w.wCtx.pgRdrFn, false); err != nil {
+				if pg, err = s.ReadPage(pid, w.wCtx.pgRdrFn, inmemoryMode); err != nil {
 					return false, 0, 0, err
 				}
 
 				if pg.GetVersion() == state.GetVersion() || !pg.IsFlushed() {
+					// Full page should be passed for relocation
+					if pg.IsEvicted() {
+						if pg, err = s.ReadPage(pid, w.wCtx.pgRdrFn, readinMode); err != nil {
+							return false, 0, 0, err
+						}
+					}
+
 					var ok bool
 					if ok, relocOff = s.tryPageRelocation(pid, pg, buf); !ok {
 						retries++
