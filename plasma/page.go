@@ -64,6 +64,7 @@ type Page interface {
 	MarshalFull([]byte) (bs []byte, fdSz int, staleFdSz int)
 	Marshal([]byte) (bs []byte, fdSz int)
 
+	IncrVersion()
 	GetVersion() uint16
 	IsFlushed() bool
 	NeedsFlush() bool
@@ -141,14 +142,19 @@ func (pil *pageItemsList) At(i int) PageItem {
 	return (*pil)[i]
 }
 
+// [is_flushed_bit][is_evicted_bit][14 bit version]
 type pageState uint16
+
+func (ps *pageState) Marshal() uint16 {
+	return uint16(*ps & 0x3fff)
+}
 
 func (ps *pageState) GetVersion() uint16 {
 	return uint16(*ps & 0x3fff)
 }
 
 func (ps *pageState) IsFlushed() bool {
-	return *ps&0x8000 == 0x8000
+	return *ps&0x8000 > 0
 }
 
 func (ps *pageState) SetFlushed() {
@@ -159,7 +165,7 @@ func (ps *pageState) SetEvicted(v bool) {
 	if v {
 		*ps |= 0x4000
 	} else {
-		*ps = *ps & 0xBfff
+		*ps &= 0xbfff
 	}
 }
 
@@ -168,8 +174,9 @@ func (ps *pageState) IsEvicted() bool {
 }
 
 func (ps *pageState) IncrVersion() {
+	isEvicted := 0x4000 & *ps
 	v := uint16(*ps & 0x3fff)
-	*ps = pageState((v + 1) & 0x3fff)
+	*ps = pageState((v+1)&0x3fff) | isEvicted
 }
 
 type pageDelta struct {
@@ -752,11 +759,7 @@ func (pg *page) marshal(buf []byte, woffset int, pd *pageDelta,
 	if !child {
 		if pd != nil {
 			// pageVersion
-			state := pd.state
-			if full {
-				state.IncrVersion()
-			}
-
+			state := pd.state.Marshal()
 			binary.BigEndian.PutUint16(buf[woffset:woffset+2], uint16(state))
 			woffset += 2
 
@@ -1167,6 +1170,10 @@ func (pg *page) GetVersion() uint16 {
 	return pg.head.state.GetVersion()
 }
 
+func (pg *page) IncrVersion() {
+	pg.head.state.IncrVersion()
+}
+
 func (pg *page) IsFlushed() bool {
 	if pg.head == nil {
 		return false
@@ -1376,12 +1383,14 @@ func (pg *page) SwapIn(inPg Page) {
 
 func (pg *page) GetEvictOffset() lssOffset {
 	pd := pg.head
-
-	for pd.op != opPageSwapOutDelta {
+	for {
+		if pd.op == opPageSwapOutDelta {
+			return (*swapOutPageDelta)(unsafe.Pointer(pd)).offset
+		}
 		pd = pd.next
 	}
 
-	return (*swapOutPageDelta)(unsafe.Pointer(pd)).offset
+	panic("swapout-delta not found")
 }
 
 func (pg *page) DiscardUncached() {

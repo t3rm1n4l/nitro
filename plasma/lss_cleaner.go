@@ -13,6 +13,7 @@ func (s *Plasma) tryPageRelocation(pid PageId, pg Page, buf []byte) (bool, lssOf
 
 	pg.DiscardUncached()
 	pg.AddFlushRecord(offset, dataSz, true)
+	pg.IncrVersion()
 	if ok := s.UpdateMapping(pid, pg); ok {
 		s.lssCleanerWriter.sts.MemSz += int64(pg.GetMemUsed())
 	} else {
