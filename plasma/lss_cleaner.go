@@ -7,21 +7,15 @@ import (
 )
 
 func (s *Plasma) tryPageRelocation(pid PageId, pg Page, buf []byte) (bool, lssOffset) {
-	var ok bool
 	bs, dataSz, staleSz := pg.MarshalFull(buf)
 	offset, wbuf, res := s.lss.ReserveSpace(lssBlockTypeSize + len(bs))
 	writeLSSBlock(wbuf, lssPageReloc, bs)
 
-	if pg.IsInCache() {
-		pg.AddFlushRecord(offset, dataSz, true)
-		if ok = s.UpdateMapping(pid, pg); ok {
-			s.lssCleanerWriter.sts.MemSz += int64(pg.GetMemUsed())
-		}
+	pg.DiscardUncached()
+	pg.AddFlushRecord(offset, dataSz, true)
+	if ok := s.UpdateMapping(pid, pg); ok {
+		s.lssCleanerWriter.sts.MemSz += int64(pg.GetMemUsed())
 	} else {
-		ok = s.EvictPage(pid, pg, offset)
-	}
-
-	if !ok {
 		discardLSSBlock(wbuf)
 		s.lss.FinalizeWrite(res)
 		return false, 0
@@ -50,7 +44,7 @@ func (s *Plasma) CleanLSS(proceed func() bool) error {
 			state, key := decodePageState(bs[lssBlockTypeSize:])
 		retry:
 			if pid := s.getPageId(key, w.wCtx); pid != nil {
-				if pg, err = s.ReadPage(pid, w.wCtx.pgRdrFn, false); err != nil {
+				if pg, err = s.ReadPage(pid, w.wCtx.pgRdrFn, FetchFull); err != nil {
 					return false, 0, err
 				}
 

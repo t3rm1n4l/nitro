@@ -31,13 +31,13 @@ func TestPlasmaPageVisitor(t *testing.T) {
 			pidKeys = append(pidKeys, 0)
 		} else {
 
-			pg, _ := s.ReadPage(pid, nil, false)
+			pg, _ := s.ReadPage(pid, nil, FetchCached)
 			pidKeys = append(pidKeys, skiplist.IntFromItem(pg.MinItem()))
 		}
 	}
 
 	callb := func(pid PageId, partn RangePartition) error {
-		pg, _ := s.ReadPage(pid, nil, false)
+		pg, _ := s.ReadPage(pid, nil, FetchCached)
 		mu.Lock()
 		defer mu.Unlock()
 

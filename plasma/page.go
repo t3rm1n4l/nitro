@@ -27,6 +27,9 @@ const (
 	opRelocPageDelta
 
 	opRollbackDelta
+
+	opPageSwapOutDelta
+	opPageSwapInDelta
 )
 
 var pageHeaderSize = int(unsafe.Sizeof(*new(pageDelta)))
@@ -65,8 +68,6 @@ type Page interface {
 	IsFlushed() bool
 	NeedsFlush() bool
 	IsEvictable() bool
-	InCache(bool)
-	IsInCache() bool
 	MaxItem() unsafe.Pointer
 	MinItem() unsafe.Pointer
 	SetNext(PageId)
@@ -80,6 +81,12 @@ type Page interface {
 	// TODO: Clean up later
 	IsEmpty() bool
 	GetLSSOffset() lssOffset
+
+	Evict(offset lssOffset)
+	SwapIn(Page)
+	IsEvicted() bool
+	GetEvictOffset() lssOffset
+	DiscardUncached()
 }
 
 type ItemIterator interface {
@@ -137,7 +144,7 @@ func (pil *pageItemsList) At(i int) PageItem {
 type pageState uint16
 
 func (ps *pageState) GetVersion() uint16 {
-	return uint16(*ps & 0x7fff)
+	return uint16(*ps & 0x3fff)
 }
 
 func (ps *pageState) IsFlushed() bool {
@@ -148,9 +155,21 @@ func (ps *pageState) SetFlushed() {
 	*ps |= 0x8000
 }
 
+func (ps *pageState) SetEvicted(v bool) {
+	if v {
+		*ps |= 0x4000
+	} else {
+		*ps = *ps & 0xBfff
+	}
+}
+
+func (ps *pageState) IsEvicted() bool {
+	return *ps&0x4000 > 0
+}
+
 func (ps *pageState) IncrVersion() {
-	v := uint16(*ps & 0x7fff)
-	*ps = pageState((v + 1) & 0x7fff)
+	v := uint16(*ps & 0x3fff)
+	*ps = pageState((v + 1) & 0x3fff)
 }
 
 type pageDelta struct {
@@ -276,7 +295,6 @@ type page struct {
 	head        *pageDelta
 	tail        *pageDelta
 
-	inCache bool
 	memUsed int
 }
 
@@ -288,17 +306,8 @@ func (pg *page) SetNext(pid PageId) {
 	}
 }
 
-func (pg *page) InCache(in bool) {
-	pg.inCache = in
-}
-
-func (pg *page) IsInCache() bool {
-	return pg.inCache
-}
-
 func (pg *page) Reset() {
 	pg.memUsed = 0
-	pg.inCache = false
 	pg.nextPid = nil
 	pg.low = nil
 	pg.head = nil
@@ -438,6 +447,8 @@ func (pg *page) Lookup(itm unsafe.Pointer) unsafe.Pointer {
 	hiItm := pg.MaxItem()
 	filter := pg.getLookupFilter()
 
+	var swapOutPds []*pageDelta
+
 loop:
 	for pd != nil {
 		switch pd.op {
@@ -482,6 +493,15 @@ loop:
 			rpd := (*rollbackDelta)(unsafe.Pointer(pd))
 			filter.AddFilter(rpd.Filter())
 
+		case opPageSwapOutDelta:
+			l := len(swapOutPds)
+			pd = swapOutPds[l-1]
+			swapOutPds = swapOutPds[:l-1]
+			goto loop
+
+		case opPageSwapInDelta:
+			swapOutPds = append(swapOutPds, ((*swapInPageDelta)(unsafe.Pointer(pd)).swapinPd))
+
 		case opFlushPageDelta:
 		case opRelocPageDelta:
 		case opPageRemoveDelta:
@@ -518,8 +538,24 @@ func (pg *page) Close() {
 }
 
 func (pg *page) Split(pid PageId) Page {
+	var swapOutPd *pageDelta
+
 	curr := pg.head
-	for ; curr != nil && curr.op != opBasePage; curr = curr.next {
+loop:
+	for curr != nil {
+		switch curr.op {
+		case opPageSwapOutDelta:
+			curr = swapOutPd
+			swapOutPd = nil
+			if curr == nil {
+				panic("fatal")
+			}
+		case opPageSwapInDelta:
+			swapOutPd = (*swapInPageDelta)(unsafe.Pointer(curr)).swapinPd
+		case opBasePage:
+			break loop
+		}
+		curr = curr.next
 	}
 
 	var mid int
@@ -630,6 +666,11 @@ loop:
 		case opRollbackDelta:
 			rpd := (*rollbackDelta)(unsafe.Pointer(pd))
 			fmt.Println("-----rollback----", rpd.rb.start, rpd.rb.end)
+		case opPageSwapOutDelta:
+			fmt.Println("-----swapout----")
+			break loop
+		case opPageSwapInDelta:
+			fmt.Println("----swapin------")
 		}
 	}
 }
@@ -704,6 +745,8 @@ func (pg *page) Marshal(buf []byte) (bs []byte, dataSz int) {
 func (pg *page) marshal(buf []byte, woffset int, pd *pageDelta,
 	hiItm unsafe.Pointer, child bool, full bool) (offset int, staleFdSz int) {
 
+	var swapOutPd *pageDelta
+
 	hasReloc := false
 	if !child {
 		if pd != nil {
@@ -752,6 +795,24 @@ func (pg *page) marshal(buf []byte, woffset int, pd *pageDelta,
 loop:
 	for ; pd != nil; pd = pd.next {
 		switch pd.op {
+		case opPageSwapInDelta:
+			swapOutPd = (*swapInPageDelta)(unsafe.Pointer(pd)).swapinPd
+		case opPageSwapOutDelta:
+			if full {
+				pd = swapOutPd
+				swapOutPd = nil
+				if pd == nil {
+					panic("invalid full page marshal")
+				}
+				goto loop
+			} else {
+				fpd := (*swapOutPageDelta)(unsafe.Pointer(pd))
+				binary.BigEndian.PutUint16(buf[woffset:woffset+2], uint16(opFlushPageDelta))
+				woffset += 2
+				binary.BigEndian.PutUint64(buf[woffset:woffset+8], uint64(fpd.offset))
+				woffset += 8
+				break loop
+			}
 		case opInsertDelta, opDeleteDelta:
 			rpd := (*recordDelta)(unsafe.Pointer(pd))
 			if pg.cmp(rpd.itm, hiItm) < 0 {
@@ -1138,7 +1199,6 @@ func newPage(ctx *storeCtx, low unsafe.Pointer, ptr unsafe.Pointer) Page {
 		storeCtx:    ctx,
 		head:        (*pageDelta)(ptr),
 		low:         low,
-		inCache:     true,
 		prevHeadPtr: ptr,
 	}
 
@@ -1161,8 +1221,16 @@ func (pg *page) IsEmpty() bool {
 	return pg.head == nil
 }
 
-func (pg *page) IsEvictable() bool {
+func (pg *page) IsEvicted() bool {
 	if pg.head == nil {
+		return false
+	}
+
+	return pg.head.state.IsEvicted()
+}
+
+func (pg *page) IsEvictable() bool {
+	if pg.head == nil || pg.head.op == opPageSwapOutDelta {
 		return false
 	}
 
@@ -1180,7 +1248,7 @@ func (pg *page) NeedsFlush() bool {
 	}
 
 	switch pg.head.op {
-	case opFlushPageDelta, opRelocPageDelta, opPageRemoveDelta:
+	case opFlushPageDelta, opRelocPageDelta, opPageRemoveDelta, opPageSwapOutDelta:
 		return false
 	}
 
@@ -1235,6 +1303,12 @@ loop:
 			size += pageHeaderSize + 8 + 8
 		case opRollbackDelta:
 			size += pageHeaderSize + 8 + 8
+		case opPageSwapOutDelta:
+			size += pageHeaderSize
+			break loop
+		case opPageSwapInDelta:
+			swd := (*swapInPageDelta)(unsafe.Pointer(pd))
+			size += pageHeaderSize + 8 + computeMemUsed(swd.swapinPd, itemSize)
 		case opMetaDelta:
 		default:
 			panic(fmt.Sprintf("unsupported delta %d", pd.op))
@@ -1242,4 +1316,73 @@ loop:
 	}
 
 	return size
+}
+
+type swapOutPageDelta struct {
+	op       pageOp
+	chainLen uint16
+	numItems uint16
+	state    pageState
+
+	offset lssOffset
+
+	hiItm        unsafe.Pointer
+	rightSibling PageId
+}
+
+type swapInPageDelta struct {
+	pageDelta
+	swapinPd *pageDelta
+}
+
+func (pg *page) Evict(offset lssOffset) {
+	swpo := &swapOutPageDelta{
+		op:           opPageSwapOutDelta,
+		state:        pg.head.state,
+		chainLen:     pg.head.chainLen,
+		numItems:     pg.head.numItems,
+		offset:       offset,
+		hiItm:        pg.dup(pg.head.hiItm),
+		rightSibling: pg.head.rightSibling,
+	}
+
+	memUsed := pg.ComputeMemUsed()
+	swpo.state.SetEvicted(true)
+	pg.head = (*pageDelta)(unsafe.Pointer(swpo))
+	pg.memUsed = pageHeaderSize + int(pg.itemSize(swpo.hiItm)) - memUsed
+}
+
+func (pg *page) SwapIn(inPg Page) {
+	spgi := inPg.(*page)
+
+	sinPg := &swapInPageDelta{
+		pageDelta: pageDelta{
+			op:           opPageSwapInDelta,
+			state:        pg.head.state,
+			chainLen:     pg.head.chainLen,
+			numItems:     pg.head.numItems,
+			next:         pg.head,
+			hiItm:        pg.head.hiItm,
+			rightSibling: pg.head.rightSibling,
+		},
+		swapinPd: spgi.head,
+	}
+
+	pg.memUsed += pageHeaderSize + 8 + spgi.ComputeMemUsed()
+	sinPg.state.SetEvicted(false)
+	pg.head = (*pageDelta)(unsafe.Pointer(sinPg))
+}
+
+func (pg *page) GetEvictOffset() lssOffset {
+	pd := pg.head
+
+	for pd.op != opPageSwapOutDelta {
+		pd = pd.next
+	}
+
+	return (*swapOutPageDelta)(unsafe.Pointer(pd)).offset
+}
+
+func (pg *page) DiscardUncached() {
+	pg.head = (*pageDelta)(pg.prevHeadPtr)
 }

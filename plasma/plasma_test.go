@@ -511,6 +511,20 @@ func TestPlasmaEviction(t *testing.T) {
 			t.Errorf("mismatch %d != %d", i, skiplist.IntFromItem(got))
 		}
 	}
+
+	s.EvictAll()
+
+	itr := s.NewIterator()
+	i := 0
+	for itr.SeekFirst(); itr.Valid(); itr.Next() {
+		itm := skiplist.NewIntKeyItem(i)
+		got := itr.Get()
+		if skiplist.CompareInt(itm, got) != 0 {
+			t.Errorf("mismatch %d != %d", i, skiplist.IntFromItem(got))
+		}
+
+		i++
+	}
 }
 
 func TestPlasmaEvictionPerf(t *testing.T) {

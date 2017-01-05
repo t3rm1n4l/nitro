@@ -43,7 +43,7 @@ func (s *Plasma) Persist(pid PageId, evict bool, w *Writer) Page {
 retry:
 
 	// Never read from lss
-	pg, _ := s.ReadPage(pid, nil, false)
+	pg, _ := s.ReadPage(pid, nil, FetchCached)
 	if pg.NeedsFlush() {
 		bs, dataSz := pg.Marshal(buf)
 		offset, wbuf, res := s.lss.ReserveSpace(lssBlockTypeSize + len(bs))

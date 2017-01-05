@@ -71,7 +71,7 @@ func (s *Plasma) NewIterator() ItemIterator {
 
 func (itr *Iterator) initPgIterator(pid PageId, seekItm unsafe.Pointer) {
 	itr.currPid = pid
-	if pgPtr, err := itr.store.ReadPage(pid, itr.wCtx.pgRdrFn, true); err == nil {
+	if pgPtr, err := itr.store.ReadPage(pid, itr.wCtx.pgRdrFn, FetchSwapIn); err == nil {
 		pg := pgPtr.(*page)
 		if err == nil {
 			if pg.IsEmpty() {
@@ -317,6 +317,7 @@ func newPgOpIterator(pd *pageDelta, cmp skiplist.CompareFn,
 	low, high unsafe.Pointer, filter ItemFilter) (iter pgOpIterator, fdSz int) {
 
 	var hasReloc bool
+	var swapOutPd *pageDelta
 	m := &pdMergeIterator{cmp: cmp, ItemFilter: filter}
 	startPd := pd
 	pdCount := 0
@@ -325,6 +326,11 @@ func newPgOpIterator(pd *pageDelta, cmp skiplist.CompareFn,
 loop:
 	for pd != nil {
 		switch pd.op {
+		case opPageSwapInDelta:
+			swapOutPd = (*swapInPageDelta)(unsafe.Pointer(pd)).swapinPd
+		case opPageSwapOutDelta:
+			pd = swapOutPd
+			goto loop
 		case opRelocPageDelta:
 			fpd := (*flushPageDelta)(unsafe.Pointer(pd))
 			if !hasReloc {
@@ -381,6 +387,8 @@ loop:
 				if cmp(rec.itm, high) < 0 && cmp(rec.itm, low) >= 0 {
 					pdi.deltas = append(pdi.deltas, x)
 				}
+			} else if x.op == opPageSwapOutDelta {
+				x = swapOutPd
 			}
 		}
 

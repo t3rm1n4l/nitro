@@ -7,7 +7,13 @@ import (
 	"unsafe"
 )
 
-const evictMask = uint64(0x8000000000000000)
+type PageFetchMode int
+
+const (
+	FetchSwapIn PageFetchMode = iota
+	FetchFull
+	FetchCached
+)
 
 type PageTable interface {
 	AllocPageId() PageId
@@ -15,7 +21,7 @@ type PageTable interface {
 
 	CreateMapping(PageId, Page)
 	UpdateMapping(PageId, Page) bool
-	ReadPage(PageId, PageReader, swapin bool) (Page, error)
+	ReadPage(PageId, PageReader, PageFetchMode) (Page, error)
 
 	EvictPage(PageId, Page, lssOffset) bool
 }
@@ -99,55 +105,41 @@ func (s *pageTable) UpdateMapping(pid PageId, pg Page) bool {
 	return false
 }
 
-func (s *pageTable) ReadPage(pid PageId, pgRdr PageReader, swapin bool) (Page, error) {
+func (s *pageTable) ReadPage(pid PageId, pgRdr PageReader, mode PageFetchMode) (Page, error) {
 	var pg Page
 	n := pid.(*skiplist.Node)
 
 retry:
 	ptr := atomic.LoadPointer(&n.DataPtr)
 
-	if offset := uint64(uintptr(ptr)); offset&evictMask > 0 {
-		if pgRdr == nil {
-			pg = newPage(s.storeCtx, n.Item(), nil)
-			pg.SetNext(NextPid(pid))
-			return pg, nil
-		}
-
-		var err error
-		off := lssOffset(offset & ^evictMask)
-		pg, err = pgRdr(off)
+	pg = newPage(s.storeCtx, n.Item(), ptr)
+	if mode != FetchCached && pg.IsEvicted() {
+		offset := pg.GetEvictOffset()
+		swpInPg, err := pgRdr(offset)
 		if err != nil {
 			return nil, err
 		}
 
-		if swapin {
+		pg.SwapIn(swpInPg)
+		atomic.AddInt64(&s.sts.MemSz, int64(pg.GetMemUsed()))
+
+		if mode == FetchSwapIn {
 			if !s.UpdateMapping(pid, pg) {
 				atomic.AddInt64(&s.sts.SwapInConflicts, 1)
 				goto retry
 			}
-
-			pg.InCache(true)
 			atomic.AddInt64(&s.sts.NumPagesSwapIn, 1)
-			atomic.AddInt64(&s.sts.MemSz, int64(pg.ComputeMemUsed()))
 		}
-	} else {
-		pg = newPage(s.storeCtx, n.Item(), ptr)
 	}
 
 	return pg, nil
 }
 
 func (s *pageTable) EvictPage(pid PageId, pg Page, offset lssOffset) bool {
-	n := pid.(*skiplist.Node)
-	pgi := pg.(*page)
-
-	newPtr := unsafe.Pointer(uintptr(uint64(offset) | evictMask))
-	if atomic.CompareAndSwapPointer(&n.DataPtr, pgi.prevHeadPtr, newPtr) {
-		pgi.prevHeadPtr = newPtr
-		if pg.IsInCache() {
-			atomic.AddInt64(&s.sts.NumPagesSwapOut, 1)
-			atomic.AddInt64(&s.sts.MemSz, -int64(pg.ComputeMemUsed()))
-		}
+	pg.Evict(offset)
+	if s.UpdateMapping(pid, pg) {
+		atomic.AddInt64(&s.sts.NumPagesSwapOut, 1)
+		atomic.AddInt64(&s.sts.MemSz, int64(pg.GetMemUsed()))
 		return true
 	}
 

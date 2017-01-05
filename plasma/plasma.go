@@ -258,7 +258,7 @@ func (s *Plasma) doRecovery() error {
 			rmPglow := unmarshalPageSMO(pg, bs)
 			pid := s.getPageId(rmPglow, w.wCtx)
 			if pid != nil {
-				currPg, err := s.ReadPage(pid, w.wCtx.pgRdrFn, true)
+				currPg, err := s.ReadPage(pid, nil, FetchCached)
 				if err != nil {
 					return false, err
 				}
@@ -285,7 +285,7 @@ func (s *Plasma) doRecovery() error {
 			flushDataSz := len(bs)
 			w.sts.FlushDataSz += int64(flushDataSz)
 
-			currPg, err := s.ReadPage(pid, w.wCtx.pgRdrFn, true)
+			currPg, err := s.ReadPage(pid, nil, FetchCached)
 			if err != nil {
 				return false, err
 			}
@@ -312,7 +312,7 @@ func (s *Plasma) doRecovery() error {
 	// Initialize rightSiblings for all pages
 	var lastPg Page
 	callb := func(pid PageId, partn RangePartition) error {
-		pg, err := s.ReadPage(pid, w.pgRdrFn, true)
+		pg, err := s.ReadPage(pid, nil, FetchCached)
 		if lastPg != nil {
 			if err == nil && s.cmp(lastPg.MaxItem(), pg.MinItem()) != 0 {
 				panic("found missing page")
@@ -475,7 +475,7 @@ func (s *Plasma) tryPageRemoval(pid PageId, pg Page, ctx *wCtx) {
 	}
 
 	pPid := PageId(prev)
-	pPg, err := s.ReadPage(pPid, ctx.pgRdrFn, true)
+	pPg, err := s.ReadPage(pPid, ctx.pgRdrFn, FetchSwapIn)
 	if err != nil {
 		s.logError(fmt.Sprintf("tryPageRemove: err=%v", err))
 		return
@@ -536,10 +536,25 @@ func (s *Plasma) EndPageId() PageId {
 	return s.Skiplist.TailNode()
 }
 
-func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
+func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) (bool, PageFetchMode) {
 	var updated bool
 
+	var opSMO int
+	compactSMO, splitSMO, mergeSMO := 1, 2, 3
+
 	if pg.NeedCompaction(s.Config.MaxDeltaChainLen) {
+		opSMO = compactSMO
+	} else if pg.NeedSplit(s.Config.MaxPageItems) {
+		opSMO = splitSMO
+	} else if !s.isStartPage(pid) && pg.NeedMerge(s.Config.MinPageItems) {
+		opSMO = mergeSMO
+	}
+
+	if opSMO > 0 && pg.IsEvicted() {
+		return false, FetchSwapIn
+	}
+
+	if opSMO == compactSMO {
 		staleFdSz := pg.Compact()
 		updated = s.UpdateMapping(pid, pg)
 		if updated {
@@ -549,7 +564,7 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 		} else {
 			ctx.sts.CompactConflicts++
 		}
-	} else if pg.NeedSplit(s.Config.MaxPageItems) {
+	} else if opSMO == splitSMO {
 		splitPid := s.AllocPageId()
 
 		var fdSz, splitFdSz int
@@ -566,7 +581,7 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 				ctx.sts.FlushDataSz -= int64(staleFdSz)
 				ctx.sts.MemSz += int64(pg.GetMemUsed())
 			}
-			return updated
+			return updated, FetchCached
 		}
 
 		var offsets []lssOffset
@@ -614,7 +629,7 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 				s.lss.FinalizeWrite(res)
 			}
 		}
-	} else if !s.isStartPage(pid) && pg.NeedMerge(s.Config.MinPageItems) {
+	} else if opSMO == mergeSMO {
 		pg.Close()
 		if updated = s.UpdateMapping(pid, pg); updated {
 			s.tryPageRemoval(pid, pg, ctx)
@@ -629,10 +644,10 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 		}
 	}
 
-	return updated
+	return updated, FetchCached
 }
 
-func (s *Plasma) fetchPage(itm unsafe.Pointer, ctx *wCtx) (pid PageId, pg Page, err error) {
+func (s *Plasma) fetchPage(itm unsafe.Pointer, mode PageFetchMode, ctx *wCtx) (pid PageId, pg Page, err error) {
 retry:
 	if prev, curr, found := s.Skiplist.Lookup(itm, s.cmp, ctx.buf, ctx.slSts); found {
 		pid = curr
@@ -641,7 +656,7 @@ retry:
 	}
 
 refresh:
-	if pg, err = s.ReadPage(pid, ctx.pgRdrFn, true); err != nil {
+	if pg, err = s.ReadPage(pid, ctx.pgRdrFn, mode); err != nil {
 		return nil, nil, err
 	}
 
@@ -659,15 +674,17 @@ refresh:
 }
 
 func (w *Writer) Insert(itm unsafe.Pointer) error {
+	var ok bool
+	mode := FetchCached
 retry:
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, mode, w.wCtx)
 	if err != nil {
 		return err
 	}
 
 	pg.Insert(itm)
 
-	if !w.trySMOs(pid, pg, w.wCtx, true) {
+	if ok, mode = w.trySMOs(pid, pg, w.wCtx, true); !ok {
 		w.sts.InsertConflicts++
 		goto retry
 	}
@@ -678,15 +695,17 @@ retry:
 }
 
 func (w *Writer) Delete(itm unsafe.Pointer) error {
+	var ok bool
+	mode := FetchCached
 retry:
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, mode, w.wCtx)
 	if err != nil {
 		return err
 	}
 
 	pg.Delete(itm)
 
-	if !w.trySMOs(pid, pg, w.wCtx, true) {
+	if ok, mode = w.trySMOs(pid, pg, w.wCtx, true); !ok {
 		w.sts.DeleteConflicts++
 		goto retry
 	}
@@ -697,7 +716,7 @@ retry:
 }
 
 func (w *Writer) Lookup(itm unsafe.Pointer) (unsafe.Pointer, error) {
-	pid, pg, err := w.fetchPage(itm, w.wCtx)
+	pid, pg, err := w.fetchPage(itm, FetchSwapIn, w.wCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -710,7 +729,6 @@ func (w *Writer) Lookup(itm unsafe.Pointer) (unsafe.Pointer, error) {
 func (s *Plasma) fetchPageFromLSS(baseOffset lssOffset, ctx *wCtx) (*page, error) {
 	pg := &page{
 		storeCtx: s.storeCtx,
-		inCache:  false,
 	}
 
 	offset := baseOffset
@@ -746,8 +764,6 @@ loop:
 		pg.head.rightSibling = pg.getPageId(pg.head.hiItm, ctx)
 	}
 
-	pg.prevHeadPtr = unsafe.Pointer(uintptr(uint64(baseOffset) | evictMask))
-
 	return pg, nil
 }
 
@@ -755,9 +771,10 @@ func (s *Plasma) logError(err string) {
 	fmt.Printf("Plasma: (fatal error - %s)\n", err)
 }
 
+// Only used by tests
 func (w *Writer) CompactAll() {
 	callb := func(pid PageId, partn RangePartition) error {
-		if pg, err := w.ReadPage(pid, nil, false); err == nil {
+		if pg, err := w.ReadPage(pid, nil, FetchCached); err == nil {
 			staleFdSz := pg.Compact()
 			if updated := w.UpdateMapping(pid, pg); updated {
 				w.wCtx.sts.FlushDataSz -= int64(staleFdSz)
