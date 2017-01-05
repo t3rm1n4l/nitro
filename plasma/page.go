@@ -550,6 +550,7 @@ loop:
 			if curr == nil {
 				panic("fatal")
 			}
+			goto loop
 		case opPageSwapInDelta:
 			swapOutPd = (*swapInPageDelta)(unsafe.Pointer(curr)).swapinPd
 		case opBasePage:

@@ -381,7 +381,7 @@ loop:
 
 	if pdCount > 0 {
 		pdi.deltas = make([]PageItem, 0, pdCount)
-		for x := startPd; x != pd; x = x.next {
+		for x := startPd; x != pd; {
 			if x.op == opInsertDelta || x.op == opDeleteDelta {
 				rec := (*recordDelta)(unsafe.Pointer(x))
 				if cmp(rec.itm, high) < 0 && cmp(rec.itm, low) >= 0 {
@@ -389,7 +389,10 @@ loop:
 				}
 			} else if x.op == opPageSwapOutDelta {
 				x = swapOutPd
+				continue
 			}
+
+			x = x.next
 		}
 
 		s := pageItemSorter{itms: pdi.deltas, cmp: cmp}
