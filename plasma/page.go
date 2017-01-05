@@ -612,6 +612,10 @@ func (pg *page) doSplit(itm unsafe.Pointer, pid PageId, numItems int) *page {
 
 func (pg *page) Compact() int {
 	state := pg.head.state
+	if state.IsEvicted() {
+		prettyPrint(pg.head, itemStringer)
+		panic("hell")
+	}
 
 	itms, fdataSz := pg.collectItems(pg.head, nil, pg.head.hiItm)
 	memUsed := pg.ComputeMemUsed()
