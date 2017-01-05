@@ -1383,7 +1383,7 @@ func (pg *page) SwapIn(inPg Page) {
 
 func (pg *page) GetEvictOffset() lssOffset {
 	pd := pg.head
-	for {
+	for pd != nil && pd.op != opBasePage {
 		if pd.op == opPageSwapOutDelta {
 			return (*swapOutPageDelta)(unsafe.Pointer(pd)).offset
 		}
