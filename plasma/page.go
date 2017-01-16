@@ -31,7 +31,6 @@ const (
 
 const (
 	FullMarshal   = 0
-	ExistingPage  = -1
 	NoFullMarshal = ^0
 )
 
@@ -324,13 +323,10 @@ func (pg *page) newFlushPageDelta(offset lssOffset, dataSz int, numSegments int)
 
 	*(*pageDelta)(unsafe.Pointer(pd)) = *meta
 	pd.next = pg.head
-	reloc := numSegments == 0
+	reloc := numSegments == -1
 	if reloc {
 		pd.op = opRelocPageDelta
 		pd.state.IncrVersion()
-		pd.numSegments = 1
-	} else if numSegments == ExistingPage {
-		pd.op = opFlushPageDelta
 		pd.numSegments = 1
 	} else {
 		pd.op = opFlushPageDelta
@@ -711,6 +707,7 @@ func (pg *page) marshal(buf []byte, woffset int, head *pageDelta,
 		return
 	}
 
+	var isFullMarshal bool = maxSegments == 0
 	stateBuf := buf[woffset : woffset+2]
 	pd := head
 	hasReloc := false
@@ -815,8 +812,8 @@ loop:
 		case opFlushPageDelta, opRelocPageDelta:
 			fpd := (*flushPageDelta)(unsafe.Pointer(pd))
 			if int(fpd.numSegments) > maxSegments {
-				maxSegments = 0
-			} else {
+				isFullMarshal = true
+			} else if !isFullMarshal {
 				binary.BigEndian.PutUint16(buf[woffset:woffset+2], uint16(pd.op))
 				woffset += 2
 				binary.BigEndian.PutUint64(buf[woffset:woffset+8], uint64(fpd.offset))
@@ -849,9 +846,9 @@ loop:
 	if !child {
 		// pageVersion
 		state := head.state
-		// full
-		if maxSegments == 0 {
+		if isFullMarshal {
 			state.IncrVersion()
+			numSegments = -1
 		}
 		binary.BigEndian.PutUint16(stateBuf, uint16(state))
 	}

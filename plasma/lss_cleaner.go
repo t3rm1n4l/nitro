@@ -8,12 +8,12 @@ import (
 
 func (s *Plasma) tryPageRelocation(pid PageId, pg Page, buf []byte) (bool, lssOffset) {
 	var ok bool
-	bs, dataSz, staleSz, _ := pg.Marshal(buf, FullMarshal)
+	bs, dataSz, staleSz, numSegments := pg.Marshal(buf, FullMarshal)
 	offset, wbuf, res := s.lss.ReserveSpace(lssBlockTypeSize + len(bs))
 	writeLSSBlock(wbuf, lssPageReloc, bs)
 
 	if pg.IsInCache() {
-		pg.AddFlushRecord(offset, dataSz, FullMarshal)
+		pg.AddFlushRecord(offset, dataSz, numSegments)
 		if ok = s.UpdateMapping(pid, pg); ok {
 			s.lssCleanerWriter.sts.MemSz += int64(pg.GetMemUsed())
 		}
