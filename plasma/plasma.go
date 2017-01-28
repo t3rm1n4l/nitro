@@ -47,6 +47,8 @@ type Plasma struct {
 	rpSns          unsafe.Pointer
 	rpVersion      uint16
 	recoveryPoints []*RecoveryPoint
+
+	clockCh chan []PageId
 }
 
 type Stats struct {
@@ -141,6 +143,7 @@ func New(cfg Config) (*Plasma, error) {
 	s := &Plasma{
 		Config:   cfg,
 		Skiplist: sl,
+		clockCh:  make(chan []PageId, clockChanBufSize),
 	}
 
 	ptWr := s.NewWriter()
@@ -220,7 +223,8 @@ func New(cfg Config) (*Plasma, error) {
 		}
 
 		if cfg.AutoSwapper {
-			go s.swapperDaemon()
+			//go s.swapperDaemon()
+			go s.clockVisitor()
 		}
 	}
 
@@ -651,6 +655,8 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 }
 
 func (s *Plasma) fetchPage(itm unsafe.Pointer, ctx *wCtx) (pid PageId, pg Page, err error) {
+
+	s.tryEvictPages(ctx)
 retry:
 	if prev, curr, found := s.Skiplist.Lookup(itm, s.cmp, ctx.buf, ctx.slSts); found {
 		pid = curr

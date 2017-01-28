@@ -38,8 +38,8 @@ func getLSSBlockType(bs []byte) lssBlockType {
 	return lssBlockType(binary.BigEndian.Uint16(bs))
 }
 
-func (s *Plasma) Persist(pid PageId, evict bool, w *Writer) Page {
-	buf := w.wCtx.GetBuffer(0)
+func (s *Plasma) Persist(pid PageId, evict bool, ctx *wCtx) Page {
+	buf := ctx.GetBuffer(0)
 retry:
 
 	// Never read from lss
@@ -56,13 +56,13 @@ retry:
 		} else {
 			pg.AddFlushRecord(offset, dataSz, numSegments)
 			if ok = s.UpdateMapping(pid, pg); ok {
-				w.sts.MemSz += int64(pg.GetMemUsed())
+				ctx.sts.MemSz += int64(pg.GetMemUsed())
 			}
 		}
 
 		if ok {
 			s.lss.FinalizeWrite(res)
-			w.sts.FlushDataSz += int64(dataSz) - int64(staleFdSz)
+			ctx.sts.FlushDataSz += int64(dataSz) - int64(staleFdSz)
 		} else {
 			discardLSSBlock(wbuf)
 			s.lss.FinalizeWrite(res)
@@ -80,7 +80,7 @@ retry:
 
 func (s *Plasma) PersistAll() {
 	callb := func(pid PageId, partn RangePartition) error {
-		s.Persist(pid, false, s.persistWriters[partn.Shard])
+		s.Persist(pid, false, s.persistWriters[partn.Shard].wCtx)
 		return nil
 	}
 
@@ -90,7 +90,7 @@ func (s *Plasma) PersistAll() {
 
 func (s *Plasma) EvictAll() {
 	callb := func(pid PageId, partn RangePartition) error {
-		s.Persist(pid, true, s.evictWriters[partn.Shard])
+		s.Persist(pid, true, s.evictWriters[partn.Shard].wCtx)
 		return nil
 	}
 
@@ -105,7 +105,7 @@ func (s *Plasma) RunSwapper(proceed func() bool) {
 
 	callb := func(pid PageId, partn RangePartition) error {
 		if proceed() && random[partn.Shard].Float32() <= 0.3 {
-			s.Persist(pid, true, s.evictWriters[partn.Shard])
+			s.Persist(pid, true, s.evictWriters[partn.Shard].wCtx)
 		}
 		return nil
 	}
