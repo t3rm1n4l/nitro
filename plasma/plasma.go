@@ -15,13 +15,11 @@ type PageReader func(offset LSSOffset) (Page, error)
 const maxCtxBuffers = 3
 
 var (
-	memQuota    int64
-	dbInstances *skiplist.Skiplist
-)
+	memQuota int64
 
-func init() {
-	dbInstances = skiplist.New()
-}
+	glock       sync.RWMutex
+	dbInstances []*Plasma
+)
 
 type Plasma struct {
 	Config
@@ -228,9 +226,10 @@ func New(cfg Config) (*Plasma, error) {
 		}
 	}
 
-	sbuf := dbInstances.MakeBuf()
-	defer dbInstances.FreeBuf(sbuf)
-	dbInstances.Insert(unsafe.Pointer(s), ComparePlasma, sbuf, &dbInstances.Stats)
+	glock.Lock()
+	dbInstances = append(dbInstances, s)
+	glock.Unlock()
+
 	return s, err
 }
 
@@ -372,9 +371,6 @@ func (s *Plasma) Close() {
 		s.lss.Close()
 	}
 
-	sbuf := dbInstances.MakeBuf()
-	defer dbInstances.FreeBuf(sbuf)
-	dbInstances.Delete(unsafe.Pointer(s), ComparePlasma, sbuf, &dbInstances.Stats)
 }
 
 func ComparePlasma(a, b unsafe.Pointer) int {
@@ -808,11 +804,10 @@ func QuotaSwapper() bool {
 }
 
 func MemoryInUse() (sz int64) {
-	buf := dbInstances.MakeBuf()
-	defer dbInstances.FreeBuf(buf)
-	iter := dbInstances.NewIterator(ComparePlasma, buf)
-	for iter.SeekFirst(); iter.Valid(); iter.Next() {
-		db := (*Plasma)(iter.Get())
+	glock.RLock()
+	defer glock.RUnlock()
+
+	for _, db := range dbInstances {
 		sz += db.MemoryInUse()
 	}
 
