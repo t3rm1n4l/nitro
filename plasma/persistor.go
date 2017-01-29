@@ -3,7 +3,7 @@ package plasma
 import (
 	"encoding/binary"
 	"fmt"
-	"math/rand"
+	//	"math/rand"
 	"time"
 	"unsafe"
 )

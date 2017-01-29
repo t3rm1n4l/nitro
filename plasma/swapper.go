@@ -43,3 +43,10 @@ func (s *Plasma) tryEvictPages(ctx *wCtx) {
 		}
 	}
 }
+
+func (w *Writer) EvictSome() {
+	pids := <-w.clockCh
+	for _, pid := range pids {
+		w.Persist(pid, true, w.wCtx)
+	}
+}

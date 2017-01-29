@@ -382,13 +382,18 @@ type Writer struct {
 	*wCtx
 }
 
+func (w *Writer) SetEvictor(fn func()) {
+	w.wCtx.tryEvictPages = fn
+}
+
 type wCtx struct {
 	buf       *skiplist.ActionBuffer
 	pgBuffers [][]byte
 	slSts     *skiplist.Stats
 	sts       *Stats
 
-	pgRdrFn PageReader
+	pgRdrFn       PageReader
+	tryEvictPages func()
 }
 
 func (s *Plasma) newWCtx() *wCtx {
@@ -652,7 +657,9 @@ func (s *Plasma) trySMOs(pid PageId, pg Page, ctx *wCtx, doUpdate bool) bool {
 
 func (s *Plasma) fetchPage(itm unsafe.Pointer, ctx *wCtx) (pid PageId, pg Page, err error) {
 
-	s.tryEvictPages(ctx)
+	if ctx.tryEvictPages != nil {
+		ctx.tryEvictPages()
+	}
 retry:
 	if prev, curr, found := s.Skiplist.Lookup(itm, s.cmp, ctx.buf, ctx.slSts); found {
 		pid = curr
