@@ -98,31 +98,29 @@ func (s *Plasma) EvictAll() {
 }
 
 func (s *Plasma) RunSwapper(proceed func() bool) {
-	random := make([]*rand.Rand, s.NumEvictorThreads)
-	for i, _ := range random {
-		random[i] = rand.New(rand.NewSource(rand.Int63()))
-	}
-
-	callb := func(pid PageId, partn RangePartition) error {
-		if proceed() && random[partn.Shard].Float32() <= 0.3 {
-			s.Persist(pid, true, s.evictWriters[partn.Shard].wCtx)
+	/*
+		random := make([]*rand.Rand, s.NumEvictorThreads)
+		for i, _ := range random {
+			random[i] = rand.New(rand.NewSource(rand.Int63()))
 		}
-		return nil
-	}
 
-	s.PageVisitor(callb, s.NumEvictorThreads)
+		callb := func(pid PageId, partn RangePartition) error {
+			if proceed() && random[partn.Shard].Float32() <= 0.3 {
+				s.Persist(pid, true, s.evictWriters[partn.Shard].wCtx)
+			}
+			return nil
+		}
+
+		s.PageVisitor(callb, s.NumEvictorThreads)
+	*/
+
+	s.tryEvictPages(s.evictWriters[0].wCtx)
+
 }
 
 func (s *Plasma) swapperDaemon() {
 loop:
 	for {
-		select {
-		case <-s.stopswapper:
-			s.stopswapper <- struct{}{}
-			break loop
-		default:
-		}
-
 		if s.TriggerSwapper() && s.GetStats().NumCachedPages > 0 {
 			fmt.Println("Swapper: started")
 			numEvicted := s.GetStats().NumPagesSwapOut

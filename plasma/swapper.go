@@ -35,7 +35,7 @@ func (s *Plasma) clockVisitor() {
 
 func (s *Plasma) tryEvictPages(ctx *wCtx) {
 	if s.TriggerSwapper != nil {
-		for s.TriggerSwapper() {
+		for s.TriggerSwapper() && s.GetStats().NumCachedPages > 0 {
 			pids := <-s.clockCh
 			for _, pid := range pids {
 				s.Persist(pid, true, ctx)

@@ -221,7 +221,7 @@ func New(cfg Config) (*Plasma, error) {
 		}
 
 		if cfg.AutoSwapper {
-			//go s.swapperDaemon()
+			go s.swapperDaemon()
 			go s.clockVisitor()
 		}
 	}
