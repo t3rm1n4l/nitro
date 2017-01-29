@@ -38,7 +38,8 @@ func getLSSBlockType(bs []byte) lssBlockType {
 	return lssBlockType(binary.BigEndian.Uint16(bs))
 }
 
-func (s *Plasma) Persist(pid PageId, evict bool, ctx *wCtx) Page {
+func (s *Plasma) Persist(pid PageId, evict bool, ctx *wCtx) bool {
+	var evicted bool
 	buf := ctx.GetBuffer(0)
 retry:
 
@@ -53,6 +54,7 @@ retry:
 		var ok bool
 		if evict {
 			ok = s.EvictPage(pid, pg, offset)
+			evicted = ok
 		} else {
 			pg.AddFlushRecord(offset, dataSz, numSegments)
 			if ok = s.UpdateMapping(pid, pg); ok {
@@ -70,12 +72,12 @@ retry:
 		}
 	} else if evict && pg.IsEvictable() {
 		offset, _ := pg.GetLSSOffset()
-		if !s.EvictPage(pid, pg, offset) {
+		if evicted = s.EvictPage(pid, pg, offset); !evicted {
 			goto retry
 		}
 	}
 
-	return pg
+	return evicted
 }
 
 func (s *Plasma) PersistAll() {

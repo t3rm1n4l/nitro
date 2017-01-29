@@ -5,6 +5,7 @@ import "errors"
 const (
 	clockChanBufSize    = 40
 	clockSweepBatchSize = 4
+	minEvictSome        = 4
 )
 
 func (s *Plasma) clockVisitor() {
@@ -45,8 +46,15 @@ func (s *Plasma) tryEvictPages(ctx *wCtx) {
 }
 
 func (w *Writer) EvictSome() {
+	count := 0
+retry:
 	pids := <-w.clockCh
 	for _, pid := range pids {
-		w.Persist(pid, true, w.wCtx)
+		if w.Persist(pid, true, w.wCtx) {
+			count++
+		}
+		if count < minEvictSome {
+			goto retry
+		}
 	}
 }
