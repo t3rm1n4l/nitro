@@ -257,7 +257,6 @@ type page struct {
 	tail        *pageDelta
 
 	inCache bool
-	memUsed int
 }
 
 func (pg *page) SetNext(pid PageId) {
