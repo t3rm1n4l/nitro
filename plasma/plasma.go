@@ -308,7 +308,7 @@ func (s *Plasma) doRecovery() error {
 		case lssMaxSn:
 			s.currSn = decodeMaxSn(bs)
 		case lssPageRemove:
-			rmPglow := unmarshalPageSMO(pg, bs)
+			rmPglow := getRmPageLow(bs)
 			pid := s.getPageId(rmPglow, w.wCtx)
 			if pid != nil {
 				currPg, err := s.ReadPage(pid, w.wCtx.pgRdrFn, true, w.wCtx)
