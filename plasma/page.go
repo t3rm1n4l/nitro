@@ -839,8 +839,7 @@ func (pg *page) unmarshalDelta(data []byte, ctx *wCtx) (offset LSSOffset, hasCha
 	if l == 0 {
 		pg.low = skiplist.MinItem
 	} else {
-		pg.low = pg.alloc(uintptr(l))
-		memcopy(pg.low, unsafe.Pointer(&data[roffset]), l)
+		pg.low = unsafe.Pointer(&data[roffset])
 		roffset += l
 	}
 
