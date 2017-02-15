@@ -968,6 +968,7 @@ func getRmPageLow(data []byte) unsafe.Pointer {
 		return nil
 	}
 
+	roffset += 2
 	return unsafe.Pointer(&data[roffset])
 }
 
