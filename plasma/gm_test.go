@@ -22,15 +22,15 @@ func TestPlasmaGreaterThanMemoryPerf(t *testing.T) {
 	var wg sync.WaitGroup
 
 	os.RemoveAll("teststore.data")
-	numThreads := 8
-	n := 20000000
+	numThreads := 16
+	n := 1000000000
 	iterations := 5
 	nPerThr := n / numThreads
 	cfg := testSnCfg
 	cfg.TriggerSwapper = QuotaSwapper
 	s := newTestIntPlasmaStore(cfg)
 	defer s.Close()
-	SetMemoryQuota(1024 * 1024 * 1024)
+	SetMemoryQuota(400 * 1024 * 1024)
 	total := numThreads * nPerThr
 
 	t0 := time.Now()
@@ -89,5 +89,7 @@ func TestPlasmaGreaterThanMemoryPerf(t *testing.T) {
 		fmt.Println(s.GetStats())
 		fmt.Printf("%d items update took %v -> %v items/s\n", total, dur, float64(total)/float64(dur.Seconds()))
 	}
+
+	close(stopch)
 
 }

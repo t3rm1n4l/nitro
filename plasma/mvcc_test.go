@@ -1,6 +1,7 @@
 package plasma
 
 import (
+	"crypto/md5"
 	"encoding/binary"
 	"fmt"
 	"github.com/couchbase/nitro/skiplist"
@@ -196,7 +197,8 @@ func doInsertMVCC(w *testWriter, wg *sync.WaitGroup, id, n int) {
 	for i := 0; i < n; i++ {
 		val := i + id*n
 		binary.BigEndian.PutUint64(buf, uint64(val))
-		w.InsertKV(buf, nil)
+		s := md5.Sum(buf)
+		w.InsertKV(s[:], nil)
 		w.numOps++
 	}
 }
@@ -211,8 +213,9 @@ func doUpdateMVCC(w *testWriter, wg *sync.WaitGroup, id, n int, itern int) {
 		val := i + id*n
 		binary.BigEndian.PutUint64(kbuf, uint64(val))
 		binary.BigEndian.PutUint64(vbuf, uint64(itern))
-		w.DeleteKV(kbuf)
-		w.InsertKV(kbuf, vbuf)
+		s := md5.Sum(kbuf)
+		w.DeleteKV(s[:])
+		w.InsertKV(s[:], vbuf)
 		w.numOps++
 	}
 }
