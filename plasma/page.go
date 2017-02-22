@@ -909,6 +909,7 @@ loop:
 			*(*pageDelta)(unsafe.Pointer(rpd)) = *pg.head
 			rpd.op = op
 			pd = (*pageDelta)(unsafe.Pointer(rpd))
+			pd.next = nil
 		case opPageSplitDelta:
 			spd := pg.allocSplitPageDelta(hiItm)
 			*(*pageDelta)(unsafe.Pointer(spd)) = *pg.head
@@ -946,6 +947,7 @@ loop:
 			rpd.op = op
 			pd = (*pageDelta)(unsafe.Pointer(rpd))
 			roffset += 16
+			pd.next = nil
 		}
 
 		lastPd.next = pd
@@ -1155,6 +1157,7 @@ func (pg *page) Evict(offset LSSOffset, numSegs int) {
 	sod.op = opSwapoutDelta
 	sod.offset = offset
 	sod.numSegments = int32(numSegs)
+	sod.next = nil
 	pg.head = (*pageDelta)(unsafe.Pointer(sod))
 }
 
