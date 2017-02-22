@@ -8,6 +8,7 @@ import (
 
 func (s *Plasma) tryPageRelocation(pid PageId, pg Page, buf []byte, ctx *wCtx) (bool, LSSOffset) {
 	var ok bool
+	pg.Compact()
 	bs, dataSz, staleSz, numSegments := pg.Marshal(buf, FullMarshal)
 	offset, wbuf, res := s.lss.ReserveSpace(lssBlockTypeSize + len(bs))
 	writeLSSBlock(wbuf, lssPageReloc, bs)
