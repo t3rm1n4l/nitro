@@ -1,6 +1,7 @@
 package plasma
 
 import (
+	"github.com/couchbase/nitro/mm"
 	"reflect"
 	"unsafe"
 )
@@ -79,10 +80,10 @@ func (s *storeCtx) destroyPg(ptr *pageDelta) {
 func (pg *page) allocMetaDelta(hiItm unsafe.Pointer) *metaPageDelta {
 	l := pg.itemSize(hiItm)
 	size := metaDeltaSize + l
-	pg.memUsed += int(size)
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		d := (*metaPageDelta)(ptr)
 		if l == 0 {
 			d.hiItm = hiItm
@@ -94,17 +95,18 @@ func (pg *page) allocMetaDelta(hiItm unsafe.Pointer) *metaPageDelta {
 		return d
 	}
 
+	pg.memUsed += int(size)
 	return &metaPageDelta{hiItm: pg.dup(hiItm)}
 }
 
 func (pg *page) allocRecordDelta(itm unsafe.Pointer) *recordDelta {
 	l := pg.itemSize(itm)
 	size := recDeltaSize + l
-	pg.memUsed += int(size)
 	pg.nrecAllocs++
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		d := (*recordDelta)(ptr)
 		if l == 0 {
 			d.itm = itm
@@ -116,6 +118,7 @@ func (pg *page) allocRecordDelta(itm unsafe.Pointer) *recordDelta {
 		return d
 	}
 
+	pg.memUsed += int(size)
 	d := new(recordDelta)
 	d.itm = pg.dup(itm)
 	return d
@@ -124,11 +127,11 @@ func (pg *page) allocRecordDelta(itm unsafe.Pointer) *recordDelta {
 func (pg *page) allocBasePage(n int, dataSz uintptr, hiItm unsafe.Pointer) *basePage {
 	l := pg.itemSize(hiItm)
 	size := basePageSize + dataSz + uintptr(n)*8 + l
-	pg.memUsed += int(size)
 	pg.nrecAllocs += n
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		bp := (*basePage)(ptr)
 		sh := (*reflect.SliceHeader)(unsafe.Pointer(&bp.items))
 		sh.Data = uintptr(ptr) + basePageSize
@@ -145,6 +148,7 @@ func (pg *page) allocBasePage(n int, dataSz uintptr, hiItm unsafe.Pointer) *base
 		return bp
 	}
 
+	pg.memUsed += int(size)
 	bp := new(basePage)
 	bp.items = make([]unsafe.Pointer, n)
 	bp.data = pg.alloc(dataSz)
@@ -155,10 +159,10 @@ func (pg *page) allocBasePage(n int, dataSz uintptr, hiItm unsafe.Pointer) *base
 func (pg *page) allocSplitPageDelta(hiItm unsafe.Pointer) *splitPageDelta {
 	l := pg.itemSize(hiItm)
 	size := splitPageDeltaSize + l
-	pg.memUsed += int(size)
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		d := (*splitPageDelta)(ptr)
 		if l == 0 {
 			d.hiItm = hiItm
@@ -170,6 +174,7 @@ func (pg *page) allocSplitPageDelta(hiItm unsafe.Pointer) *splitPageDelta {
 		return d
 	}
 
+	pg.memUsed += int(size)
 	d := new(splitPageDelta)
 	d.hiItm = pg.dup(hiItm)
 	return d
@@ -178,10 +183,10 @@ func (pg *page) allocSplitPageDelta(hiItm unsafe.Pointer) *splitPageDelta {
 func (pg *page) allocMergePageDelta(hiItm unsafe.Pointer) *mergePageDelta {
 	l := pg.itemSize(hiItm)
 	size := mergePageDeltaSize + l
-	pg.memUsed += int(size)
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		d := (*mergePageDelta)(ptr)
 		if l == 0 {
 			d.hiItm = hiItm
@@ -193,50 +198,54 @@ func (pg *page) allocMergePageDelta(hiItm unsafe.Pointer) *mergePageDelta {
 		return d
 	}
 
+	pg.memUsed += int(size)
 	d := new(mergePageDelta)
 	d.hiItm = pg.dup(hiItm)
 	return d
 }
 
 func (pg *page) allocFlushPageDelta() *flushPageDelta {
-	pg.memUsed += int(flushPageDeltaSize)
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(flushPageDeltaSize)
+		pg.memUsed += mm.SizeAt(ptr)
 		pg.addDeltaAlloc(ptr)
 		return (*flushPageDelta)(ptr)
 	}
 
+	pg.memUsed += int(flushPageDeltaSize)
 	return new(flushPageDelta)
 }
 
 func (pg *page) allocRemovePageDelta() *removePageDelta {
-	pg.memUsed += int(removePageDeltaSize)
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(removePageDeltaSize)
+		pg.memUsed += mm.SizeAt(ptr)
 		pg.addDeltaAlloc(ptr)
 		return (*removePageDelta)(ptr)
 	}
 
+	pg.memUsed += int(removePageDeltaSize)
 	return new(removePageDelta)
 }
 
 func (pg *page) allocRollbackPageDelta() *rollbackDelta {
-	pg.memUsed += int(rollbackDeltaSize)
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(rollbackDeltaSize)
+		pg.memUsed += mm.SizeAt(ptr)
 		pg.addDeltaAlloc(ptr)
 		return (*rollbackDelta)(ptr)
 	}
 
+	pg.memUsed += int(rollbackDeltaSize)
 	return new(rollbackDelta)
 }
 
 func (pg *page) allocSwapoutDelta(hiItm unsafe.Pointer) *swapoutDelta {
 	l := pg.itemSize(hiItm)
 	size := swapoutDeltaSize + l
-	pg.memUsed += int(size)
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		d := (*swapoutDelta)(ptr)
 		if l == 0 {
 			d.hiItm = hiItm
@@ -248,6 +257,7 @@ func (pg *page) allocSwapoutDelta(hiItm unsafe.Pointer) *swapoutDelta {
 		return (*swapoutDelta)(ptr)
 	}
 
+	pg.memUsed += int(size)
 	d := new(swapoutDelta)
 	d.hiItm = pg.dup(hiItm)
 	return d
@@ -255,14 +265,15 @@ func (pg *page) allocSwapoutDelta(hiItm unsafe.Pointer) *swapoutDelta {
 
 func (pg *page) allocSwapinDelta() *swapinDelta {
 	size := swapoutDeltaSize
-	pg.memUsed += int(size)
 
 	if pg.useMemMgmt {
 		ptr := pg.allocMM(size)
+		pg.memUsed += mm.SizeAt(ptr)
 		pg.addDeltaAlloc(ptr)
 		return (*swapinDelta)(ptr)
 	}
 
+	pg.memUsed += int(size)
 	d := new(swapinDelta)
 	return d
 }

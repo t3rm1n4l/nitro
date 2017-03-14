@@ -3,6 +3,7 @@ package plasma
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/couchbase/nitro/mm"
 	"github.com/couchbase/nitro/skiplist"
 	"sort"
 	"unsafe"
@@ -1259,23 +1260,19 @@ loop:
 		switch pd.op {
 		case opBasePage:
 			bp := (*basePage)(unsafe.Pointer(pd))
-			var dataSz int
-			for _, itm := range bp.items {
-				dataSz += int(itemSize(itm))
+			for _, _ = range bp.items {
 				n++
 			}
 
-			size += int(basePageSize) + dataSz + len(bp.items)*8 + int(itemSize(bp.hiItm))
+			size += mm.SizeAt(unsafe.Pointer(pd))
 			break loop
 		case opInsertDelta, opDeleteDelta:
-			rpd := (*recordDelta)(unsafe.Pointer(pd))
-			size += pageHeaderSize + int(itemSize(rpd.itm)) + 8
 			n++
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opPageRemoveDelta:
-			size += int(removePageDeltaSize)
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opPageSplitDelta:
-			spd := (*splitPageDelta)(unsafe.Pointer(pd))
-			size += int(recDeltaSize + itemSize(spd.itm))
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opPageMergeDelta:
 			pdm := (*mergePageDelta)(unsafe.Pointer(pd))
 			nx, sx := computeMemUsed(pdm.mergeSibling, itemSize)
@@ -1283,15 +1280,13 @@ loop:
 			size += sx
 			n += nx
 		case opFlushPageDelta, opRelocPageDelta:
-			size += int(flushPageDeltaSize)
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opRollbackDelta:
-			size += int(rollbackDeltaSize)
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opMetaDelta:
-			mpd := (*metaPageDelta)(unsafe.Pointer(pd))
-			size += int(metaDeltaSize + itemSize(mpd.hiItm))
+			size += mm.SizeAt(unsafe.Pointer(pd))
 		case opSwapoutDelta:
-			sod := (*swapoutDelta)(unsafe.Pointer(pd))
-			size += int(swapoutDeltaSize + itemSize(sod.hiItm))
+			size += mm.SizeAt(unsafe.Pointer(pd))
 			break loop
 		case opSwapinDelta:
 			sid := (*swapinDelta)(unsafe.Pointer(pd))
