@@ -28,7 +28,11 @@ const (
 type item uint32
 
 func (itm *item) Size() int {
-	return itm.l() + itmHdrLen + itmSnSize
+	var snSize int
+	if *itm&itmSnFlag > 0 {
+		snSize = itmSnSize
+	}
+	return itm.l() + itmHdrLen + snSize
 }
 
 func (itm *item) IsInsert() bool {
@@ -147,13 +151,17 @@ func (s *Plasma) newItem(k, v []byte, sn uint64, del bool, buf *Buffer) (
 		klen := (*uint32)(unsafe.Pointer(uintptr(ptr) + itmHdrLen))
 		*klen = uint32(kl)
 
-		snp := (*uint64)(unsafe.Pointer(uintptr(ptr) + uintptr(itmHdrLen+itmKlenSize+kl)))
-		*snp = sn
+		if sn > 1 {
+			snp := (*uint64)(unsafe.Pointer(uintptr(ptr) + uintptr(itmHdrLen+itmKlenSize+kl)))
+			*snp = sn
+		}
 		memcopy(unsafe.Pointer(uintptr(ptr)+itmHdrLen+itmKlenSize), unsafe.Pointer(&k[0]), kl)
 		memcopy(unsafe.Pointer(uintptr(ptr)+itmHdrLen+itmKlenSize+uintptr(snSize)+uintptr(kl)), unsafe.Pointer(&v[0]), vl)
 	} else {
-		snp := (*uint64)(unsafe.Pointer(uintptr(ptr) + uintptr(itmHdrLen+kl)))
-		*snp = sn
+		if sn > 1 {
+			snp := (*uint64)(unsafe.Pointer(uintptr(ptr) + uintptr(itmHdrLen+kl)))
+			*snp = sn
+		}
 		*hdr |= uint32(kl)
 		memcopy(unsafe.Pointer(uintptr(ptr)+itmHdrLen), unsafe.Pointer(&k[0]), kl)
 	}
