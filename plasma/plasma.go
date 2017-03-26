@@ -112,14 +112,18 @@ type Stats struct {
 
 	NumPages int64
 
-	LSSFrag      int
-	LSSDataSize  int64
-	LSSUsedSpace int64
-	NumLSSReads  int64
-	LSSReadBytes int64
+	LSSFrag         int
+	LSSDataSize     int64
+	LSSUsedSpace    int64
+	NumLSSReads     int64
+	LSSReadBytes    int64
+	NumLSSBlkReads  int64
+	LSSBlkReadBytes int64
 
-	NumLSSCleanerReads  int64
-	LSSCleanerReadBytes int64
+	NumLSSCleanerReads     int64
+	LSSCleanerReadBytes    int64
+	LSSCleanerBlkReadBytes int64
+	NumLSSCleanerBlkReads  int64
 
 	CacheHits   int64
 	CacheMisses int64
@@ -161,6 +165,8 @@ func (s *Stats) Merge(o *Stats) {
 
 	s.NumLSSReads += o.NumLSSReads
 	s.LSSReadBytes += o.LSSReadBytes
+	s.LSSBlkReadBytes += o.LSSBlkReadBytes
+	s.NumLSSBlkReads += o.NumLSSBlkReads
 
 	s.CacheHits += o.CacheHits
 	s.CacheMisses += o.CacheMisses
@@ -204,8 +210,12 @@ func (s Stats) String() string {
 		"lss_used_space    = %d\n"+
 		"lss_num_reads     = %d\n"+
 		"lss_read_bs       = %d\n"+
+		"lss_num_blkreads  = %d\n"+
+		"lss_blkread_bs    = %d\n"+
 		"lss_gc_num_reads  = %d\n"+
 		"lss_gc_reads_bs   = %d\n"+
+		"lss_gc_num_blkreads = %d\n"+
+		"lss_gc_blkread_bs = %d\n"+
 		"cache_hits        = %d\n"+
 		"cache_misses      = %d\n"+
 		"cache_hit_ratio   = %.2f\n"+
@@ -225,8 +235,8 @@ func (s Stats) String() string {
 		s.BytesIncoming, s.BytesWritten,
 		s.WriteAmp, s.WriteAmpAvg,
 		s.LSSFrag, s.LSSDataSize, s.LSSUsedSpace,
-		s.NumLSSReads, s.LSSReadBytes,
-		s.NumLSSCleanerReads, s.LSSCleanerReadBytes,
+		s.NumLSSReads, s.LSSReadBytes, s.NumLSSBlkReads, s.LSSBlkReadBytes,
+		s.NumLSSCleanerReads, s.LSSCleanerReadBytes, s.NumLSSCleanerBlkReads, s.LSSCleanerBlkReadBytes,
 		s.CacheHits, s.CacheMisses, s.CacheHitRatio,
 		s.ResidentRatio)
 }
@@ -330,6 +340,8 @@ func New(cfg Config) (*Plasma, error) {
 			s.evictWriters[i] = s.newWCtx()
 		}
 		s.lssCleanerWriter = s.newWCtx()
+		s.lssCleanerBuf.SetStats(&s.lssCleanerWriter.sts.NumLSSBlkReads,
+			&s.lssCleanerWriter.sts.LSSBlkReadBytes)
 
 		if cfg.AutoLSSCleaning {
 			go s.lssCleanerDaemon()
@@ -711,6 +723,8 @@ func (s *Plasma) GetStats() Stats {
 		sts.LSSFrag, sts.LSSDataSize, sts.LSSUsedSpace = s.GetLSSInfo()
 		sts.NumLSSCleanerReads = s.lssCleanerWriter.sts.NumLSSReads
 		sts.LSSCleanerReadBytes = s.lssCleanerWriter.sts.LSSReadBytes
+		sts.LSSCleanerBlkReadBytes = s.lssCleanerWriter.sts.LSSBlkReadBytes
+		sts.NumLSSCleanerBlkReads = s.lssCleanerWriter.sts.NumLSSBlkReads
 		sts.CacheHitRatio = s.gCtx.sts.CacheHitRatio
 		sts.WriteAmp = s.gCtx.sts.WriteAmp
 		bsOut := float64(sts.BytesWritten)
@@ -1074,7 +1088,7 @@ func (s *Plasma) fetchPageFromLSS2(baseOffset LSSOffset, ctx *wCtx,
 	numSegments := 0
 loop:
 	for {
-		data, err := s.lss.Read(offset, dataBuf)
+		n, rdBS, data, err := s.lss.Read(offset, dataBuf)
 		if err != nil {
 			return nil, err
 		}
@@ -1082,6 +1096,9 @@ loop:
 		l := len(data)
 		ctx.sts.NumLSSReads++
 		ctx.sts.LSSReadBytes += int64(l)
+
+		ctx.sts.LSSBlkReadBytes += int64(rdBS)
+		ctx.sts.NumLSSBlkReads += int64(n)
 
 		typ := getLSSBlockType(data)
 		switch typ {

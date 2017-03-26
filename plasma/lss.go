@@ -596,6 +596,13 @@ type LogRABuffer struct {
 	start, end   int64
 	b            *Buffer
 	bbuf         []byte
+	numStats     *int64
+	bsStats      *int64
+}
+
+func (ra *LogRABuffer) SetStats(a, b *int64) {
+	ra.numStats = a
+	ra.bsStats = b
 }
 
 func (ra *LogRABuffer) Read(offset int64) ([]byte, error) {
@@ -621,6 +628,9 @@ func (ra *LogRABuffer) refill(offset int64, size int) (int64, error) {
 		if err = ra.log.Read(ra.bbuf, ra.start); err == io.EOF {
 			err = nil
 		}
+
+		*ra.numStats++
+		*ra.bsStats += int64(len(ra.bbuf))
 	}
 
 	return offset - ra.start, err
