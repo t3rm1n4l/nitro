@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -226,7 +227,6 @@ retry:
 }
 
 func (s *lsStore) Read(lssOf LSSOffset, buf *Buffer) ([]byte, error) {
-	var err error
 	offset := int64(lssOf)
 retry:
 	tailOff := s.log.Tail()
@@ -249,7 +249,7 @@ retry:
 	bufSize := int(endBlock-startBlock) * blockSize
 
 	rdBuf := buf.Get(0, bufSize)
-	if err := s.log.Read(rdBuf, startBlock*blockSize); err != nil {
+	if err := s.log.Read(rdBuf, startBlock*blockSize); err != nil && err != io.EOF {
 		return nil, err
 	}
 
@@ -260,11 +260,15 @@ retry:
 	if remaining > 0 {
 		remaining += blockSize - remaining%blockSize
 		rdBuf = buf.Get(0, bufSize+remaining)
-		err = s.log.Read(rdBuf[bufSize:bufSize+remaining], endBlock*blockSize)
+
+		if err := s.log.Read(rdBuf[bufSize:bufSize+remaining],
+			endBlock*blockSize); err != nil && err != io.EOF {
+			return nil, err
+		}
 	}
 
 	bbuf := rdBuf[lenOffset+headerFBSize : lenOffset+headerFBSize+l]
-	return bbuf, err
+	return bbuf, nil
 }
 
 func (s *lsStore) FinalizeWrite(res LSSResource) {
