@@ -1074,15 +1074,15 @@ func (s *Plasma) fetchPageFromLSS2(baseOffset LSSOffset, ctx *wCtx,
 	numSegments := 0
 loop:
 	for {
-		l, err := s.lss.Read(offset, dataBuf)
+		data, err := s.lss.Read(offset, dataBuf)
 		if err != nil {
 			return nil, err
 		}
 
+		l := len(data)
 		ctx.sts.NumLSSReads++
 		ctx.sts.LSSReadBytes += int64(l)
 
-		data := dataBuf.Get(0, l)
 		typ := getLSSBlockType(data)
 		switch typ {
 		case lssPageData, lssPageReloc, lssPageUpdate:
