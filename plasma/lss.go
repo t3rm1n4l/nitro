@@ -16,6 +16,7 @@ const headerSize = superBlockSize * 2
 const superBlockSize = 4096
 const lssReclaimBlockSize = 1024 * 1024 * 8
 const expiredLSSOffset = LSSOffset(^uint64(0))
+const blockSize = 4096
 
 var ErrCorruptSuperBlock = errors.New("Superblock is corrupted")
 
@@ -225,6 +226,7 @@ retry:
 }
 
 func (s *lsStore) Read(lssOf LSSOffset, buf *Buffer) ([]byte, error) {
+	var err error
 	offset := int64(lssOf)
 retry:
 	tailOff := s.log.Tail()
@@ -242,14 +244,26 @@ retry:
 		goto retry
 	}
 
-	lenBuf := buf.Get(0, headerFBSize)
-	if err := s.log.Read(lenBuf, offset); err != nil {
+	startBlock := offset / blockSize
+	endBlock := (offset + headerFBSize + blockSize - 1) / blockSize
+	bufSize := int(endBlock-startBlock) * blockSize
+
+	rdBuf := buf.Get(0, bufSize)
+	if err := s.log.Read(rdBuf, startBlock*blockSize); err != nil {
 		return nil, err
 	}
 
-	l := int(binary.BigEndian.Uint32(lenBuf))
-	bbuf := buf.Get(0, l)
-	err := s.log.Read(bbuf, offset+headerFBSize)
+	lenOffset := int(offset % blockSize)
+	l := int(binary.BigEndian.Uint32(rdBuf[lenOffset : lenOffset+headerFBSize]))
+
+	remaining := l - (bufSize - lenOffset - headerFBSize)
+	if remaining > 0 {
+		remaining += blockSize - remaining%blockSize
+		rdBuf = buf.Get(0, bufSize+remaining)
+		err = s.log.Read(rdBuf[bufSize:bufSize+remaining], endBlock*blockSize)
+	}
+
+	bbuf := rdBuf[lenOffset+headerFBSize : lenOffset+headerFBSize+l]
 	return bbuf, err
 }
 
