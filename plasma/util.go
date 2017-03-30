@@ -62,7 +62,7 @@ func (b *Buffer) Grow(offset, size int) {
 			sz = offset + size
 		}
 
-		newBuf := make([]byte, sz)
+		newBuf := newAlignedBuf(sz)
 		copy(newBuf, b.bs)
 		b.bs = newBuf
 	}
@@ -77,8 +77,15 @@ func (b *Buffer) Ptr(offset int) unsafe.Pointer {
 	return unsafe.Pointer(&b.bs[offset])
 }
 
+func newAlignedBuf(size int) []byte {
+	bs := make([]byte, size+blockSize)
+	alignOffset := blockSize - (int(uintptr(unsafe.Pointer(&bs[0])) % blockSize))
+	bs = bs[alignOffset : alignOffset+size]
+	return bs
+}
+
 func newBuffer(size int) *Buffer {
 	return &Buffer{
-		bs: make([]byte, size),
+		bs: newAlignedBuf(size),
 	}
 }

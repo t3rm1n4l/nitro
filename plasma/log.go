@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"syscall"
 	"unsafe"
 )
 
@@ -35,8 +36,8 @@ type Log interface {
 }
 
 type logFile struct {
-	fd   *os.File
-	data mmap.MMap
+	wfd, rfd *os.File
+	data     mmap.MMap
 }
 
 type fileIndex struct {
@@ -99,20 +100,22 @@ func newLog(path string, segmentSize int64, sync bool, mmap bool) (Log, error) {
 func newLogFile(file string, flags int, maxSize int, enableMmap bool) (*logFile, error) {
 	var err error
 	lf := new(logFile)
-	lf.fd, err = os.OpenFile(file, os.O_RDWR|flags, 0755)
+	lf.wfd, err = os.OpenFile(file, os.O_RDWR|flags, 0755)
 	if err != nil {
 		return nil, err
 	}
 
 	if enableMmap {
-		lf.data, err = mmap.MapRegion(lf.fd, maxSize, mmap.RDONLY, 0, 0)
+		lf.data, err = mmap.MapRegion(lf.wfd, maxSize, mmap.RDONLY, 0, 0)
+	} else {
+		lf.rfd, err = os.OpenFile(file, os.O_RDONLY|syscall.O_DIRECT, 0755)
 	}
 
 	return lf, err
 }
 
 func (lf *logFile) Close() error {
-	err := lf.fd.Close()
+	err := lf.wfd.Close()
 	if err != nil {
 		return err
 	}
@@ -120,7 +123,7 @@ func (lf *logFile) Close() error {
 		lf.data.Unmap()
 	}
 
-	return nil
+	return lf.rfd.Close()
 }
 
 func (l *multiFilelog) initIndex() error {
@@ -140,7 +143,7 @@ func (l *multiFilelog) initIndex() error {
 		if lf, err := newLogFile(f, 0, int(l.segmentSize), l.enableMmap); err == nil {
 			fi.index = append(fi.index, lf)
 			if i == len(files)-1 {
-				fi.w = lf.fd
+				fi.w = lf.wfd
 			}
 		} else {
 			for _, lf := range fi.index {
@@ -179,7 +182,7 @@ retry:
 	if l.enableMmap {
 		copy(bs, idx.index[fdIdx].data[fdOffset:])
 	} else {
-		if _, err := idx.index[fdIdx].fd.ReadAt(bs, fdOffset); err != nil {
+		if _, err := idx.index[fdIdx].rfd.ReadAt(bs, fdOffset); err != nil {
 			return err
 		}
 	}
@@ -225,7 +228,7 @@ func (l *multiFilelog) growLog() error {
 
 	newIdx := *idx
 	newIdx.index = append(newIdx.index, lf)
-	newIdx.w = lf.fd
+	newIdx.w = lf.wfd
 	newIdx.endOffset += l.segmentSize
 
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&l.index)), unsafe.Pointer(&newIdx))
@@ -282,7 +285,7 @@ func (l *multiFilelog) doGCSegments() {
 		toRemove := idx.index[:n]
 		var rmList []string
 		for _, lf := range toRemove {
-			rmList = append(rmList, lf.fd.Name())
+			rmList = append(rmList, lf.wfd.Name())
 			lf.Close()
 		}
 		toRetain := append([]*logFile(nil), idx.index[n:]...)
