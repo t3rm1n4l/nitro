@@ -34,8 +34,9 @@ type LSS interface {
 	TrimLog(LSSOffset)
 	Read(LSSOffset, *Buffer) ([]byte, error)
 	Sync(bool)
-	Visitor(callb LSSBlockCallback, buf *Buffer) error
-	RunCleaner(callb LSSCleanerCallback, buf *Buffer) error
+	NewRABuffer(int64) *LogRABuffer
+	Visitor(callb LSSBlockCallback, buf *LogRABuffer) error
+	RunCleaner(callb LSSCleanerCallback, buf *LogRABuffer) error
 	BytesWritten() int64
 
 	SetSafeTrimCallback(LSSSafeTrimCallback)
@@ -276,7 +277,7 @@ func (s *lsStore) FinalizeWrite(res LSSResource) {
 	fb.Done()
 }
 
-func (s *lsStore) RunCleaner(callb LSSCleanerCallback, buf *Buffer) error {
+func (s *lsStore) RunCleaner(callb LSSCleanerCallback, buf *LogRABuffer) error {
 	s.Lock()
 	defer s.Unlock()
 
@@ -301,14 +302,15 @@ func (s *lsStore) RunCleaner(callb LSSCleanerCallback, buf *Buffer) error {
 	return s.visitor(startOff, tailOff, fn, buf)
 }
 
-func (s *lsStore) Visitor(callb LSSBlockCallback, buf *Buffer) error {
+func (s *lsStore) Visitor(callb LSSBlockCallback, buf *LogRABuffer) error {
 	return s.visitor(s.log.Head(), s.log.Tail(), callb, buf)
 }
 
-func (s *lsStore) visitor(start, end int64, callb LSSBlockCallback, buf *Buffer) error {
+func (s *lsStore) visitor(start, end int64, callb LSSBlockCallback, buf *LogRABuffer) error {
+
 	curr := start
 	for curr < end {
-		bbuf, err := s.Read(LSSOffset(curr), buf)
+		bbuf, err := buf.Read(curr)
 		if err != nil {
 			return err
 		}
@@ -571,4 +573,48 @@ func isResetState(state uint64) bool {
 
 func lssBlockEndOffset(off LSSOffset, b []byte) LSSOffset {
 	return headerFBSize + off + LSSOffset(len(b))
+}
+
+func (lss *lsStore) NewRABuffer(cacheSize int64) *LogRABuffer {
+	return &LogRABuffer{
+		maxCacheSize: cacheSize,
+		log:          lss.log,
+		b:            newBuffer(0),
+	}
+}
+
+type LogRABuffer struct {
+	maxCacheSize int64
+	log          Log
+	start, end   int64
+	b            *Buffer
+	bbuf         []byte
+}
+
+func (ra *LogRABuffer) Read(offset int64) ([]byte, error) {
+	rdOffset, err := ra.refill(offset, headerFBSize)
+	l := int(binary.BigEndian.Uint32(ra.bbuf[rdOffset : rdOffset+headerFBSize]))
+	rdOffset, err = ra.refill(offset+headerFBSize, l)
+	return ra.bbuf[rdOffset : rdOffset+int64(l)], err
+}
+
+func (ra *LogRABuffer) refill(offset int64, size int) (int64, error) {
+	var err error
+	if !(offset >= ra.start && offset+int64(size) < ra.end) {
+		ra.start = blockSize * (offset / blockSize)
+		ra.end = blockSize * ((offset + int64(size) + blockSize - 1) / blockSize)
+
+		bufSize := ra.end - ra.start
+		if bufSize < ra.maxCacheSize {
+			ra.end = ra.start + ra.maxCacheSize
+			bufSize = ra.maxCacheSize
+		}
+
+		ra.bbuf = ra.b.Get(0, int(bufSize))
+		if err = ra.log.Read(ra.bbuf, ra.start); err == io.EOF {
+			err = nil
+		}
+	}
+
+	return offset - ra.start, err
 }

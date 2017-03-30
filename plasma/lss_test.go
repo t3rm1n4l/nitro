@@ -125,7 +125,7 @@ func TestLSSCleaner(t *testing.T) {
 					return false, endOff, nil
 				}
 				return true, endOff, nil
-			}, newBuffer(0))
+			}, lss.NewRABuffer(4095))
 		}
 	}()
 
@@ -183,7 +183,7 @@ func TestLSSSuperBlock(t *testing.T) {
 				} else {
 					return false, off, nil
 				}
-			}, newBuffer(0))
+			}, lss.NewRABuffer(4096))
 		}
 	}()
 

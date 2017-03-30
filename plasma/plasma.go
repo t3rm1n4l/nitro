@@ -19,8 +19,6 @@ const (
 	bufEncMeta
 	bufTempItem
 	bufReloc
-	bufCleaner
-	bufRecovery
 	bufFetch
 	bufPersist
 )
@@ -44,6 +42,7 @@ type Plasma struct {
 	wlist                           []*Writer
 	lss                             LSS
 	lssCleanerWriter                *wCtx
+	lssCleanerBuf                   *LogRABuffer
 	persistWriters                  []*wCtx
 	evictWriters                    []*wCtx
 	stoplssgc, stopswapper, stopmon chan struct{}
@@ -315,6 +314,7 @@ func New(cfg Config) (*Plasma, error) {
 			return nil, err
 		}
 
+		s.lssCleanerBuf = s.lss.NewRABuffer(cfg.ReadAheadBufferSize)
 		s.lss.SetSafeTrimCallback(s.findSafeLSSTrimOffset)
 		s.initLRUClock()
 		err = s.doRecovery()
@@ -414,7 +414,7 @@ func (s *Plasma) doInit() {
 func (s *Plasma) doRecovery() error {
 	pg := newPage(s.gCtx, nil, nil).(*page)
 
-	buf := s.gCtx.GetBuffer(bufRecovery)
+	buf := s.lss.NewRABuffer(s.ReadAheadBufferSize)
 
 	fn := func(offset LSSOffset, bs []byte) (bool, error) {
 		typ := getLSSBlockType(bs)

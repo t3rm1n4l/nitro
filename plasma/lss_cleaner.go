@@ -32,7 +32,6 @@ func (s *Plasma) CleanLSS(proceed func() bool) error {
 	var pg Page
 	w := s.lssCleanerWriter
 	relocBuf := w.GetBuffer(bufReloc)
-	cleanerBuf := w.GetBuffer(bufCleaner)
 
 	relocated := 0
 	retries := 0
@@ -102,7 +101,7 @@ func (s *Plasma) CleanLSS(proceed func() bool) error {
 	start := s.lss.HeadOffset()
 	end := s.lss.TailOffset()
 	fmt.Printf("logCleaner: starting... frag %d, data: %d, used: %d log:(%d - %d)\n", frag, ds, used, start, end)
-	err := s.lss.RunCleaner(callb, cleanerBuf)
+	err := s.lss.RunCleaner(callb, s.lssCleanerBuf)
 	frag, ds, used = s.GetLSSInfo()
 	start = s.lss.HeadOffset()
 	end = s.lss.TailOffset()

@@ -29,6 +29,7 @@ var testSnCfg = Config{
 	AutoLSSCleaning:     true,
 	AutoSwapper:         true,
 	EnableShapshots:     true,
+	ReadAheadBufferSize: 1024 * 1024,
 }
 
 func TestMVCCSimple(t *testing.T) {

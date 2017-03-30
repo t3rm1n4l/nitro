@@ -24,6 +24,7 @@ type Config struct {
 	LSSLogSegmentSize   int64
 	File                string
 	FlushBufferSize     int
+	ReadAheadBufferSize int64
 	NumPersistorThreads int
 	NumEvictorThreads   int
 
@@ -143,6 +144,7 @@ func DefaultConfig() Config {
 		AutoLSSCleaning:     true,
 		AutoSwapper:         false,
 		EnableShapshots:     true,
+		ReadAheadBufferSize: 1024 * 1024 * 4,
 		SyncInterval:        0,
 	}
 }
