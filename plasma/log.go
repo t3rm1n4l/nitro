@@ -251,7 +251,9 @@ retry:
 
 	if wl := int64(len(bs)); wl > 0 {
 		woffset := tail % l.segmentSize
-		if _, err := idx.w.WriteAt(bs, woffset); err != nil {
+		eOffset := blockSize * ((woffset + int64(len(bs)) + blockSize - 1) / blockSize)
+		bsL := int(eOffset - woffset)
+		if _, err := idx.w.WriteAt(bs[:bsL], woffset); err != nil {
 			return err
 		}
 

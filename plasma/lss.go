@@ -178,7 +178,7 @@ func (s *lsStore) initNextBuffer(currFb *flushBuffer, minSize int) {
 	nextFb.seqno = currFb.seqno + 1
 
 	if len(nextFb.b) < minSize {
-		nextFb.b = make([]byte, minSize)
+		nextFb.b = make([]byte, minSize, minSize+4096)
 	}
 
 	// 1 writer rc for parent to enforce ordering of flush callback
@@ -374,7 +374,7 @@ type flushBuffer struct {
 func newFlushBuffer(sz int, callb flushCallback) *flushBuffer {
 	return &flushBuffer{
 		state: encodeState(false, 1, 0),
-		b:     make([]byte, sz),
+		b:     make([]byte, sz, sz+4096),
 		callb: callb,
 	}
 }
