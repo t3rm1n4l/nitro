@@ -70,8 +70,9 @@ func (f *rollbackFilter) Reset() {
 
 // Used by snapshot iterator
 type snFilter struct {
-	sn   uint64
-	skip bool
+	sn         uint64
+	lastItmPtr unsafe.Pointer
+	skip       bool
 	rollbackFilter
 }
 
@@ -80,13 +81,24 @@ func (f *snFilter) Process(o PageItem) PageItemsList {
 		return nilPageItemsList
 	}
 
-	itm := (*item)(o.Item())
+	itmPtr := o.Item()
+	itm := (*item)(itmPtr)
 	if f.skip || itm.Sn() > f.sn {
 		f.skip = false
 		return nilPageItemsList
 	}
 
-	if !itm.IsInsert() {
+	if SupportUpsert {
+		if itm.IsInsert() && f.lastItmPtr != nil && cmpItem(itmPtr, f.lastItmPtr) == 0 {
+			return nilPageItemsList
+		} else {
+			f.lastItmPtr = nil
+		}
+	}
+
+	if itm.IsInsert() {
+		f.lastItmPtr = itmPtr
+	} else {
 		f.skip = true
 		return nilPageItemsList
 	}

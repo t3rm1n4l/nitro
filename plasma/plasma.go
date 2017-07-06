@@ -810,6 +810,7 @@ func (r *Reader) NewSnapshotIterator(snap *Snapshot) (*MVCCIterator, error) {
 
 	snap.Open()
 	r.iter.filter.(*snFilter).sn = snap.sn
+	r.iter.filter.(*snFilter).lastItmPtr = nil
 	r.iter.token = r.iter.BeginTx()
 	r.iter.snap = snap
 	return r.iter, nil
